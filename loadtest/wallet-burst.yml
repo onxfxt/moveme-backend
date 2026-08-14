@@ -1,0 +1,21 @@
+config:
+  target: "http://localhost:4000"
+  processor: "./processor.js"
+  phases:
+    - duration: 20
+      arrivalRate: 15
+      name: "Sustained top-up burst — ~15 requests/sec for 20 seconds"
+
+scenarios:
+  - name: "Wallet top-up burst"
+    flow:
+      - function: "assignWalletTarget"
+      - post:
+          url: "/wallet/topup/dev-instant"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          json:
+            amountThebe: "{{ amountThebe }}"
+          expect:
+            - statusCode: 200
+          afterResponse: "recordTopupResult"

@@ -1,0 +1,217 @@
+// moveMe — Production database schema
+// Default: MySQL, matching WAMP's bundled MySQL for local hosting.
+// See .env.example for the connection string, and README.md's "Hosting with
+// WAMP" section for the full setup. Run `npx prisma migrate dev` after any
+// change to this file.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql" // matches WAMP's bundled MySQL. For other hosts: "postgresql" works too — just change this and DATABASE_URL.
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER
+  DRIVER
+}
+
+enum VehicleType {
+  CAR
+  TRUCK
+  WASTE
+  EQUIPMENT
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum JobType {
+  RIDE
+  COURIER
+  MOVING
+  WASTE
+}
+
+enum JobStatus {
+  OPEN
+  BIDDING
+  ACCEPTED
+  COMPLETED
+  CANCELLED
+}
+
+model User {
+  id                String   @id @default(uuid())
+  name              String
+  phone             String   @unique
+  country           String   @default("Botswana")
+  role              Role
+  passwordless      Boolean  @default(true) // moveMe uses OTP, not passwords
+  verification      VerificationStatus @default(PENDING)
+  idDocUrl          String?
+  licenceDocUrl     String?
+  prdpDocUrl        String?
+  darkMode          Boolean  @default(false)
+  notifSounds       Boolean  @default(true)
+  pushEnabled       Boolean  @default(false)
+  expoPushToken     String?
+  lastLat           Float?
+  lastLng           Float?
+  enrouteActive     Boolean  @default(false)
+  enrouteDestination String?
+  agreedToTerms     Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  vehicle           Vehicle?
+  walletBalance     Int      @default(0) // stored in thebe (1 BWP = 100 thebe) to avoid float rounding errors
+  jobsAsCustomer    Job[]    @relation("CustomerJobs")
+  jobsAsDriver      Job[]    @relation("DriverJobs")
+  bids              Bid[]
+  walletTxns        WalletTransaction[]
+  messagesSent      Message[]
+  ratingsGiven      Rating[] @relation("RatingGiver")
+  ratingsReceived   Rating[] @relation("RatingReceiver")
+  otpCodes          OtpCode[]
+  adminMessagesReceived AdminMessage[]
+}
+
+model Vehicle {
+  id             String      @id @default(uuid())
+  user           User        @relation(fields: [userId], references: [id])
+  userId         String      @unique
+  type           VehicleType
+  // car fields
+  makeModel      String?
+  color          String?
+  plate          String?
+  photoUrl       String?
+  // truck fields
+  truckType      String?
+  capacityTier   Int?        // index into CAPACITY_TIERS, see services/pricing.js
+  // waste fields
+  wasteGeneral   Boolean     @default(false)
+  wasteClinical  Boolean     @default(false)
+  clinicalPermitUrl String?
+  // equipment fields
+  equipmentDesc  String?
+  // service opt-in toggles (per Settings screen)
+  serviceRide    Boolean     @default(true)
+  serviceCourier Boolean     @default(true)
+  serviceGoods   Boolean     @default(true)
+  serviceRemoval Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+}
+
+model Job {
+  id             String    @id @default(uuid())
+  type           JobType
+  subtype        String?   // 'removal' | 'goods' | 'general' | 'clinical' | 'custom'
+  rideTier       String?   // 'go' | 'comfort' | 'xl' — customer's chosen ride tier, RIDE jobs only
+  pickup         String
+  dropoff        String
+  stops          String?   // JSON-encoded array of extra courier stops
+  itemDesc       String?
+  description    String?   // for waste / custom equipment jobs
+  distanceKm     Float?
+  pickupLat      Float?
+  pickupLng      Float?
+  suggestedFare  Int?      // thebe
+  price          Int?      // thebe — null while awaiting quotes
+  status         JobStatus @default(OPEN)
+  custom         Boolean   @default(false)
+  scheduledFor   DateTime?
+  commissionRate Float     // snapshotted at creation so later rate changes don't rewrite history
+  createdAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  customer       User      @relation("CustomerJobs", fields: [customerId], references: [id])
+  customerId     String
+  driver         User?     @relation("DriverJobs", fields: [driverId], references: [id])
+  driverId       String?
+
+  bids           Bid[]
+  messages       Message[]
+  ratings        Rating[]
+}
+
+model Bid {
+  id         String   @id @default(uuid())
+  job        Job      @relation(fields: [jobId], references: [id])
+  jobId      String
+  driver     User     @relation(fields: [driverId], references: [id])
+  driverId   String
+  amount     Int      // thebe
+  createdAt  DateTime @default(now())
+}
+
+model WalletTransaction {
+  id         String   @id @default(uuid())
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  amount     Int      // thebe; positive = credit, negative = debit
+  kind       String   // 'topup' | 'topup_pending' | 'job_earning' | 'commission'
+  status     String   @default("confirmed") // 'pending' | 'confirmed' | 'failed' — topups start pending until the payment webhook confirms them
+  reference  String?  // job id, or payment provider transaction reference (tx_ref)
+  createdAt  DateTime @default(now())
+}
+
+model Rating {
+  id          String   @id @default(uuid())
+  job         Job      @relation(fields: [jobId], references: [id])
+  jobId       String
+  giver       User     @relation("RatingGiver", fields: [giverId], references: [id])
+  giverId     String
+  receiver    User     @relation("RatingReceiver", fields: [receiverId], references: [id])
+  receiverId  String
+  stars       Int
+  comment     String?  // only customers rating drivers may set this
+  createdAt   DateTime @default(now())
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  job       Job      @relation(fields: [jobId], references: [id])
+  jobId     String
+  sender    User     @relation(fields: [senderId], references: [id])
+  senderId  String
+  text      String
+  createdAt DateTime @default(now())
+}
+
+model AdminMessage {
+  id          String   @id @default(uuid())
+  toUser      User     @relation(fields: [toUserId], references: [id])
+  toUserId    String
+  adminUserId String   // the AdminAccount.id of whoever sent this (see AdminAccount model)
+  title       String
+  body        String
+  createdAt   DateTime @default(now())
+}
+
+model AdminAccount {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("staff") // 'owner' | 'staff' — owner can manage other admin accounts, staff cannot
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  lastLoginAt  DateTime?
+}
+
+model OtpCode {
+  id        String   @id @default(uuid())
+  user      User?    @relation(fields: [userId], references: [id])
+  userId    String?
+  phone     String
+  code      String
+  expiresAt DateTime
+  consumed  Boolean  @default(false)
+  createdAt DateTime @default(now())
+}

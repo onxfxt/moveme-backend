@@ -1,0 +1,24 @@
+config:
+  target: "http://localhost:4000"
+  processor: "./processor.js"
+  phases:
+    # arrivalCount fires ALL of these virtual users within the 1-second
+    # window below, rather than trickling them in — as close to "everyone
+    # taps Accept at the same instant" as a phase-based load tool gets.
+    # (For a stricter, true-simultaneous test, see the note in README.md
+    # about the supplementary raw-concurrency script.)
+    - duration: 1
+      arrivalCount: 25
+      name: "All drivers hit Accept on the same job at once"
+
+scenarios:
+  - name: "Concurrent job accept"
+    flow:
+      - function: "assignDriverToken"
+      - patch:
+          url: "/jobs/{{ jobId }}/accept"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          expect:
+            - statusCode: [200, 409]
+          afterResponse: "recordAcceptResult"
